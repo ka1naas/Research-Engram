@@ -37,6 +37,7 @@ class Idea(Base):
 
     owner = relationship("User", back_populates="ideas")
     papers = relationship("Paper", back_populates="idea")
+    messages = relationship("Message", back_populates="idea", cascade="all, delete-orphan")
 
 class Paper(Base):
     __tablename__ = "papers"
@@ -50,3 +51,15 @@ class Paper(Base):
     #关联到Idea和User，back_populates表示建立双向关系
     idea = relationship("Idea",back_populates="papers")
     uploader = relationship('User',back_populates='papers')
+
+class Message(Base):
+    __tablename__ = "messages"
+
+    id = Column(Integer, primary_key=True, index=True)
+    content = Column(Text) # 聊天具体内容
+    role = Column(String)  # 是 "user" 说的还是 "ai" 说的
+    created_at = Column(DateTime, default=datetime.datetime.utcnow) # 什么时候说的
+    user_id = Column(Integer, ForeignKey("users.id"))
+    idea_id = Column(Integer, ForeignKey("ideas.id"), nullable=True) # 可以为空（闲聊模式）
+
+    idea = relationship("Idea", back_populates="messages")

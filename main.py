@@ -40,22 +40,23 @@ async def chat_endpoint(
     db: Session = Depends(get_db)
 ):
     try:
+
         return await services.chat_with_deepseek(db, request)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-# --- 接口: 批判性思考Agent ---
-# 前端在"Idea详情页"点击"AI 评审"按钮时调用这个
+# 前端的“一键深度评审”
 @app.post("/agent/critique/")
 async def critique_endpoint(
     user_id: int = Form(...),
-    query: str = Form(...), # 用户的Idea内容
+    query: str = Form(...), 
     idea_id: int = Form(...),
     db: Session = Depends(get_db)
 ):
     try:
-        # 调用批判性 Agent
+        # 这里依然调用你原来的那个复杂的 Agent 逻辑
         critique_content = await services.critical_agent_chat(db, user_id, query, idea_id)
+        # 注意：Agent 返回的是纯文本，不是 ChatResponse 对象，前端要注意区分
         return {"response": critique_content}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

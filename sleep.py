@@ -102,7 +102,7 @@ def process_one_user(db: Session, user: models.User):#Hippocampus
         print(f'更新画像：{new_persona_json}')
 
         user.persona = new_persona_json
-        user.last_sleep_time = datetime.datetime.utnow()
+        user.last_sleep_time = datetime.datetime.utcnow()
         db.commit()
 
         

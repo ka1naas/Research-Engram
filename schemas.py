@@ -68,9 +68,14 @@ class ChatRequest(BaseModel):
     
     # 允许用户显式控制：是否将这句话存为长期知识？
     save_as_knowledge: bool = False
+    #模式控制 对话；idea；找茬
+    mode: Literal['chat', 'update', 'critique'] = 'chat'
+    #对话回溯轮次
+    history_len: int = 3
 
 # 聊天响应：后端回给前端的
 class ChatResponse(BaseModel):
-    response_text: str # AI总结的新Idea
+    response_text: str # AI的回答
     suggested_idea: Optional[str] = None # 是否通过新idea，可为空值
-    used_references: List[str] = [] # 本次对话引用的记忆，必须是列表
+    used_references: List[str] = [] # 本次对话引用的知识，必须是列表
+    message_id: int # 对话id
