@@ -1,10 +1,16 @@
-import json
+'''
+此代码用于生成用户画像,提取对话内容
+'''
 import time
+import json
+import os
+from sqlalchemy.orm import Session
+from database import SessionLocal # 👈 从这里拿数据库连接器
+import models
 from vector_memory import VectorMemory
 import openai
 from dotenv import load_dotenv
-#from utils import STOP_WORDS
-import os
+import datetime
 
 #加载api用于“做梦”
 load_dotenv('.env')
@@ -13,72 +19,71 @@ client = openai.OpenAI(
     base_url="https://api.deepseek.com"
 )
 
-def sleep_and_consolidate(LM_path='long_m.json'):#Hippocampus
-    #初始化睡眠时间 & 用户画像
-    #last_sleep_time = '1970-01-01 00:00:00'
-    #current_persona = []
+memory_core = VectorMemory()
 
-    if os.path.exists(LM_path):
-        try:
-            with open(LM_path,'r',encoding='utf-8') as f:
-                data = json.load(f)
-                #获取旧画像
-                current_persona = data.get('user_persona',[])
-                last_sleep_time = data.get('last_sleep_time','1970-01-01 00:00:00')
-        except Exception as e:
-            print(f'when getting lm:{e}')
+def process_one_user(db: Session, user: models.User):#Hippocampus
+    """
+    负责处理单个用户的睡眠逻辑,提取用户画像，实现知识固化以及非知识剔除
+    """
 
-    #print(f"[调试] 系统认为上次睡觉时间是: {last_sleep_time}")
+    print(f" 用户 {user.username} 进入睡眠...")
 
-    Hippocampus = VectorMemory()
+    # 1. 获取上次睡觉时间
+    # 数据库里取出来的是 datetime 对象，转成字符串给向量库用
+    last_sleep_str = str(user.last_sleep_time)
 
-    #count = Hippocampus.collection.count()
-    #print(f"[调试] 向量数据库中现有记忆总数: {count} 条")
-    #print(Hippocampus.collection.get(
-            #include=['metadatas']
-        #) )
-
-    #获取记忆
-    new_memories = Hippocampus.get_new_memory_for_sleep(last_timestamp=last_sleep_time)
-
-    if not new_memories:
-        print('nothing new,no need to sleep')
+    # 2. 去海马体（向量库）找新记忆
+    new_memories = memory_core.get_new_memory_for_sleep(last_timestamp=last_sleep_str)
+    my_new_memories = [
+        m for m in new_memories 
+        if m['metadata'].get('user_id') == user.id
+    ]
+    if not my_new_memories:
+        print(f"用户 {user.username} 没有新记忆，无需整理。")
         return
-    print(f'there are {len(new_memories)} new memories,start to sleep.')
-
-    #整理记忆给llm学习
-    memory_text = ''
-    for mem in new_memories:
+# ================= 任务 A: 更新用户画像 (User Traits) =================
+    # 3. 整理记忆，准备prompt
+    memory_text_buffer = ''
+    high_heat_memories = []
+    for mem in my_new_memories:
         meta = mem.get('metadata',{})
         timestamp = meta.get('timestamp','unknow timestamp')
         role = meta.get('role','unknown')
         content = mem.get('content','')
-        memory_text += f'-[{timestamp}{role}:{content}]\n'
+        memory_text_buffer += f'-[{timestamp}{role}:{content}]\n'
     
     #利用llm思考
     system_prompt = '''
-    你是一个负责整理记忆的“大脑皮层”。
-    任务：根据【新记忆】和【旧画像】，更新用户画像。
-    要求：
-    1. 提取用户的新属性（如职业、爱好、项目、性格偏好）。
-    2. 如果新信息与旧画像冲突，以新的为准。
-    3. 合并相似的信息。
-    4. 输出纯 JSON 列表，不要包含 Markdown 格式或其他废话。
+    你是一个专业的用户画像侧写师。
+    你的任务是：维护和更新用户的【长期科研画像】。
+    
+    输入包含：
+    1. 【旧画像】：用户已有的画像标签。
+    2. 【新记忆】：最近发生的交互内容。
+
+    请遵循以下更新策略（Update Strategy）：
+    1. **验证 (Verify)**：如果新记忆证实了旧画像（例如旧画像说“做CV”，新记忆也是CV），则保留并强化权重。
+    2. **修正 (Correct)**：如果新记忆与旧画像直接冲突（例如旧画像说“只用PyTorch”，新记忆显示“开始转用JAX”），请以新记忆为准进行修正，并标记为“最近转变”。
+    3. **新增 (Append)**：如果发现了全新的特征，加入画像。
+    4. **遗忘 (Decay)**：不要无故删除旧画像，除非它们明显过时或错误。
+    
+    输出格式：
+    请输出一个更新后的 JSON 列表。
     '''
     #将 current_persona 对象转换为 JSON 格式的字符串，
     # ensure_ascii=False 确保非 ASCII 字符（如中文）正常显示而不被转义。
     user_prompt = f'''
     【已有的用户画像】：
-    {json.dumps(current_persona, ensure_ascii=False)}
+    {json.dumps(user.persona, ensure_ascii=False)}
 
-    【今日新记忆 (自 {last_sleep_time} 起)】：
-    {memory_text}
+    【今日新记忆 (自 {last_sleep_str} 起)】：
+    {memory_text_buffer}
 
     请输出更新后的用户画像列表：
     '''
 
     try:
-        #调用 LLM
+        #4. 调用 LLM
         response = client.chat.completions.create(
             model="deepseek-chat",
             messages=[
@@ -92,32 +97,48 @@ def sleep_and_consolidate(LM_path='long_m.json'):#Hippocampus
         new_persona_json = response.choices[0].message.content
         #去除markdown
         new_persona_json = new_persona_json.replace("```json", "").replace("```", "").strip()
-        #将 JSON 格式字符串 new_persona_json 解析为
-        #对应的 Python 对象（如字典、列表等），并赋值给变量 new_traits。
-        new_traits = json.loads(new_persona_json)
-        current_time = time.strftime("%Y-%m-%d %H:%M:%S")
-        save_data = {
-            "user_persona": new_traits,
-            "last_sleep_time": current_time}
-        
-        with open(LM_path,'w',encoding='utf-8') as f:
-            json.dump(save_data,f,ensure_ascii=False,indent=4)
-        
-        print('get new persona!')
-        for trait in new_traits:
-            print(f' -{trait}')
+
+        # 5.更新数据库
+        print(f'更新画像：{new_persona_json}')
+
+        user.persona = new_persona_json
+        user.last_sleep_time = datetime.datetime.utnow()
+        db.commit()
+
         
     except Exception as e:
         print(f"[噩梦] 睡眠处理失败: {e}")
         # 打印原始返回以便调试
+        db.rollback() # 如果出错，回滚数据库，防止坏数据
         if 'response' in locals():
-            print(f"LLM 原始返回: {response.choices[0].message.content}")
+            print(f"LLM 原始返回: {response.choices[0].message.content}")   
 
 
         
+def run_sleep_cycle():
+    """
+    主循环：打开数据库，遍历所有用户
+    """
+    print("=== 开始全员睡眠周期 ===")
+    
+    # 1. 手动创建数据库会话
+    db = SessionLocal()
+    
+    try:
+        # 2. 查出所有用户
+        users = db.query(models.User).all()
         
+        # 3. 挨个处理
+        for user in users:
+            process_one_user(db, user)
+            
+    finally:
+        # 4. 无论如何，最后一定要关闭连接！
+        db.close()
+        print("=== 睡眠周期结束，连接已关闭 ===")
+
 if __name__ == "__main__":
-    sleep_and_consolidate()
+    run_sleep_cycle()
 
 
 

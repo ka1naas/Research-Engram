@@ -15,7 +15,7 @@ def create_user(user: schemas.UserCreate, db: Session = Depends(get_db)):
         raise HTTPException(status_code=400, detail="用户名已存在")
     return crud.create_user(db=db, user=user)
 
-# --- 接口: 核心功能 - 上传论文 (PDF) ---
+# --- 接口: 上传论文 (PDF) ---
 # 注意：这里用到了 "依赖注入" (Depends) 和 "异步" (async)
 @app.post("/upload_paper/")
 async def upload_paper( # 异步函数
@@ -29,5 +29,33 @@ async def upload_paper( # 异步函数
         # 这里的 await 意思是：厨师长你去处理吧，处理完了告诉我，我去招呼别的客人
         db_paper = await services.process_paper_upload(user_id, idea_id, file, db)
         return {"status": "success", "paper_id": db_paper.id, "title": db_paper.title}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    
+# ---接口： 智能对话 ---
+# 前端对话框接这个
+@app.post("/chat/", response_model=schemas.ChatResponse)
+async def chat_endpoint(
+    request: schemas.ChatRequest, 
+    db: Session = Depends(get_db)
+):
+    try:
+        return await services.chat_with_deepseek(db, request)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+# --- 接口: 批判性思考Agent ---
+# 前端在"Idea详情页"点击"AI 评审"按钮时调用这个
+@app.post("/agent/critique/")
+async def critique_endpoint(
+    user_id: int = Form(...),
+    query: str = Form(...), # 用户的Idea内容
+    idea_id: int = Form(...),
+    db: Session = Depends(get_db)
+):
+    try:
+        # 调用批判性 Agent
+        critique_content = await services.critical_agent_chat(db, user_id, query, idea_id)
+        return {"response": critique_content}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

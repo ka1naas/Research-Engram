@@ -4,6 +4,7 @@
 from pydantic import BaseModel
 from typing import List, Optional
 from datetime import datetime
+from typing import List, Optional, Literal
 
 # --- 基础模型 (Base) ---
 # 这些是 Idea 共有的一些属性
@@ -57,3 +58,19 @@ class PaperResponse(BaseModel):
     
     class Config:
         from_attributes = True
+
+# 聊天请求：前端发给后端的
+class ChatRequest(BaseModel):
+    user_id: int
+    query: str
+    idea_id: Optional[int] = None   # 如果不传idea，就是闲聊/未定义
+    paper_id: Optional[int] = None  # 针对特定论文
+    
+    # 允许用户显式控制：是否将这句话存为长期知识？
+    save_as_knowledge: bool = False
+
+# 聊天响应：后端回给前端的
+class ChatResponse(BaseModel):
+    response_text: str # AI总结的新Idea
+    suggested_idea: Optional[str] = None # 是否通过新idea，可为空值
+    used_references: List[str] = [] # 本次对话引用的记忆，必须是列表

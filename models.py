@@ -18,6 +18,8 @@ class User(Base):
     id = Column(Integer,primary_key=True,index=True)
     username = Column(String,unique=True,index=True)
     password_hash = Column(String) # 存储加密后的密码
+    persona = Column(Text,default='')
+    last_sleep_time = Column(DateTime,default=datetime.datetime(1970, 1, 1))
 
     ideas = relationship("Idea", back_populates="owner")
     papers = relationship("Paper", back_populates="uploader")
