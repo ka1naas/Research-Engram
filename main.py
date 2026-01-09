@@ -2,10 +2,20 @@ from fastapi import FastAPI, Depends, HTTPException, UploadFile, File, Form
 from sqlalchemy.orm import Session
 import models, schemas, crud, services
 from database import engine, get_db
+from fastapi.middleware.cors import CORSMiddleware
 
 models.Base.metadata.create_all(bind=engine)
 
 app = FastAPI(title="Research Engram V1 API")
+
+# --- 暂时允许跨域请求 (CORS) ---
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"], # 允许所有来源 (开发阶段方便)
+    allow_credentials=True,
+    allow_methods=["*"], # 允许 GET, POST 等所有方法
+    allow_headers=["*"],
+)
 
 # --- 接口: 注册用户 (使用 CRUD) ---
 @app.post("/users/", response_model=schemas.UserResponse) # r_m 输出前过滤
