@@ -73,3 +73,19 @@ async def critique_endpoint(
         return {"response": critique_content}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+# --- 接口: 获取用户的所有 Idea ---
+@app.get("/users/{user_id}/ideas/")
+def get_user_ideas(user_id: int, db: Session = Depends(get_db)):
+    return db.query(models.Idea).filter(models.Idea.user_id == user_id).all()
+
+# --- 接口: 获取某个 Idea 的历史聊天记录 ---
+@app.get("/ideas/{idea_id}/messages/")
+def get_idea_messages(idea_id: int, db: Session = Depends(get_db)):
+    # 按时间正序排列，方便前端直接显示
+    return db.query(models.Message).filter(models.Message.idea_id == idea_id).order_by(models.Message.created_at.asc()).all()
+
+# --- 接口: 创建新 Idea ---
+@app.post("/ideas/")
+def create_new_idea(idea: schemas.IdeaCreate, user_id: int, db: Session = Depends(get_db)):
+    return crud.create_idea(db=db, idea=idea, user_id=user_id)
