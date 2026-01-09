@@ -47,6 +47,10 @@ class Paper(Base):
     abstract = Column(Text) # 论文摘要
     idea_id = Column(Integer, ForeignKey("ideas.id")) # 这篇论文关联到了哪个 Idea
     user_id = Column(Integer, ForeignKey("users.id"))
+
+    #保存Paper全文
+    full_text = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
     
     #关联到Idea和User，back_populates表示建立双向关系
     idea = relationship("Idea",back_populates="papers")

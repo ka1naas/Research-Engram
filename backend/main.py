@@ -6,6 +6,8 @@ from sqlalchemy.orm import Session
 import models, schemas, crud, services
 from database import engine, get_db
 from fastapi.middleware.cors import CORSMiddleware
+import sleep as memory_sleep
+from typing import List
 
 models.Base.metadata.create_all(bind=engine)
 
@@ -44,8 +46,14 @@ async def upload_paper( # 异步函数
         return {"status": "success", "paper_id": db_paper.id, "title": db_paper.title}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+# --- 接口：论文列表 ---
+
+@app.get("/ideas/{idea_id}/papers/", response_model=List[schemas.PaperResponse])
+def get_idea_papers(idea_id: int, db: Session = Depends(get_db)):
+    return db.query(models.Paper).filter(models.Paper.idea_id == idea_id).all()
     
-# ---接口： 智能对话 ---
+# --- 接口： 智能对话 ---
 # 前端对话框接这个
 @app.post("/chat/", response_model=schemas.ChatResponse)
 async def chat_endpoint(
@@ -89,3 +97,45 @@ def get_idea_messages(idea_id: int, db: Session = Depends(get_db)):
 @app.post("/ideas/")
 def create_new_idea(idea: schemas.IdeaCreate, user_id: int, db: Session = Depends(get_db)):
     return crud.create_idea(db=db, idea=idea, user_id=user_id)
+
+# --- 接口: 修改 Idea ---
+@app.put("/ideas/{idea_id}")
+def update_idea_endpoint(
+    idea_id: int, 
+    payload: dict, # 接收前端传来的 { "description": "..." }
+    db: Session = Depends(get_db)
+):
+    new_desc = payload.get("description")
+    if not new_desc:
+        raise HTTPException(status_code=400, detail="描述不能为空")
+        
+    updated_idea = crud.update_idea_content(db, idea_id, new_desc)
+    if not updated_idea:
+        raise HTTPException(status_code=404, detail="Idea 不存在")
+        
+    return {"status": "success", "id": updated_idea.id, "new_description": updated_idea.description}
+
+# --- 接口: 手动触发 sleep ---
+@app.post("/system/sleep/")
+def trigger_sleep_endpoint(
+    user_id: int = Form(...),
+    db: Session = Depends(get_db)
+):
+    # 1. 找用户
+    user = crud.get_user(db, user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="用户不存在")
+    
+    try:
+        # 2. 调用 sleep.py 里的逻辑
+        # 注意：process_one_user 函数没有返回值，它是直接打印和改数据库
+        # 我们可以稍微修改 sleep.py 让它返回统计信息，或者直接运行
+        memory_sleep.process_one_user(db, user)
+        
+        return {
+            "status": "success", 
+            "message": "大脑整理完成！画像已更新，新知识已固化。",
+            "new_persona": user.persona # 把更新后的画像返给前端看看
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))

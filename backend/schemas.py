@@ -49,6 +49,7 @@ class PaperCreate(BaseModel):
     title: str
     abstract: str
     idea_id: int # 必须指定属于哪个 Idea
+    full_text: Optional[str] = None
 
 class PaperResponse(BaseModel):
     id: int
@@ -68,10 +69,15 @@ class ChatRequest(BaseModel):
     
     # 允许用户显式控制：是否将这句话存为长期知识？
     save_as_knowledge: bool = False
-    #模式控制 对话；idea；找茬
+    # 模式控制 对话；idea；找茬
     mode: Literal['chat', 'update', 'critique'] = 'chat'
-    #对话回溯轮次
+    # 对话回溯轮次
     history_len: int = 3
+    # 是否开启全局搜索
+    enable_global_search: bool = False
+    # True = 读取数据库里的 full_text (消耗大，读得细)
+    # False = 只读取 abstract (消耗小，仅作上下文参考)
+    use_full_text: bool = False
 
 # 聊天响应：后端回给前端的
 class ChatResponse(BaseModel):

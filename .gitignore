@@ -1,0 +1,17 @@
+# 密钥与环境配置
+.env
+.venv
+venv/
+__pycache__/
+*.pyc
+
+# 数据库
+*.db
+*.sqlite
+
+# 前端依赖
+node_modules/
+dist/
+
+# OS 垃圾文件
+.DS_Store

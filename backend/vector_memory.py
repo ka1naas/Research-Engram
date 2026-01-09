@@ -70,15 +70,24 @@ class VectorMemory:
         new_memories.sort(key=lambda x: x['metadata'].get('timestamp',''))
         return new_memories
 
-    def search_memory(self,query_text,n_results=3,threshold=1):
+    def search_memory(self,query_text,n_results=3,threshold=1,filter_metadata=None):
         '''
         检索记忆
         query_text:检索的问题
         n_result:返回几条
+        filter_metadata=None:默认全局搜索
         '''
         results = self.collection.query(
             query_texts=[query_text],
             n_results=n_results
+        )
+
+        # 如果 filter_metadata 是 None，它就会进行全局搜索（联想模式的基础）
+        # 例如 {"idea_id": 1}，它就只搜这个 Idea 下的数据
+        results = self.collection.query(
+            query_texts=[query_text],
+            n_results=n_results,
+            where=filter_metadata 
         )
 
         #对返回的数据做数据清洗

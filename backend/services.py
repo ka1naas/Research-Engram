@@ -31,7 +31,7 @@ client = openai.OpenAI(
 # 注意：这里我们假设 vector_memory.py 在同一目录下
 memory_core = VectorMemory()
 
-# ================= 功能A：接收pdf，llm提取摘要，存入向量库 =================
+# ================= 功能A：接收pdf，保存全文，llm提取摘要，存入向量库 =================
 async def process_paper_upload(
     user_id: int, 
     idea_id: int, 
@@ -99,7 +99,12 @@ async def process_paper_upload(
 
     # 3. 调用 CRUD 层：存入 SQL 数据库
     # 这一步是为了保证无论向量库挂没挂，我们的基础数据都在
-    paper_schema = schemas.PaperCreate(title=title, abstract=abstract, idea_id=idea_id)
+    paper_schema = schemas.PaperCreate(
+        title=title, 
+        abstract=abstract, 
+        idea_id=idea_id,
+        full_text=full_text # 传给 schema
+    )
     db_paper = crud.create_paper_record(db=db, paper=paper_schema, user_id=user_id)
 
     # 4. 调用 VectorMemory：存入向量数据库
@@ -144,163 +149,150 @@ async def process_paper_upload(
 
     return db_paper
 
-# ================= 功能B (重构版)：通用智能对话流水线 =================
-async def chat_with_deepseek(
-    db: Session, 
-    request: schemas.ChatRequest
-):
-    # --- 1. 先把用户的这一句，存入 SQL (不管是啥模式) ---
-    user_msg = models.Message(
-        content=request.query,
-        role="user",
-        user_id=request.user_id,
-        idea_id=request.idea_id # 如果没选 idea，这里就是 None
-    )
+# ================= 功能B (重构版)：通用智能对话流水线，含function calling =================
+# services.py
+
+async def chat_with_deepseek(db: Session, request: schemas.ChatRequest):
+    # 1. 存用户消息
+    user_msg = models.Message(content=request.query, role="user", user_id=request.user_id, idea_id=request.idea_id)
     db.add(user_msg)
-    db.commit() # 拿到 user_msg.id
-    
-    # --- 2. 准备上下文 (历史记录 + 知识检索) ---
-    # A. 获取最近 N 轮对话历史 (Context)
-    history_context = ""
-    if request.idea_id and request.history_len > 0:
-        # 查这个 Idea 下最近的 N 条消息
-        last_msgs = db.query(models.Message)\
-            .filter(models.Message.idea_id == request.idea_id)\
-            .order_by(models.Message.created_at.desc())\
-            .limit(request.history_len).all()
-        
-        # 倒序回来，变成时间正序
-        last_msgs.reverse()
-        history_context = "\n".join([f"{m.role}: {m.content}" for m in last_msgs])
+    db.commit()
 
-    # B. Function Calling 这里的“Function”就是去向量库查知识 (RAG)
-    # 不管什么模式，先去大脑(VectorDB)里搜一下，以防用户在问相关知识
-    search_results = memory_core.search_memory(request.query, n_results=3)
-    knowledge_context = "\n".join([f"- {r['content']}" for r in search_results])
-    
-    # --- 3. 组装 Prompt (根据 Mode 切换系统人设) ---
-    
-    # 默认人设
-    system_instruction = "你是一个科研助手。请根据提供的上下文和知识回答用户。"
-    
-    # 获取当前 Idea 的内容（如果有）
-    current_idea_text = "用户暂无 Idea"
-    if request.idea_id:
-        idea = db.query(models.Idea).filter(models.Idea.id == request.idea_id).first()
-        if idea:
-            current_idea_text = f"标题：{idea.title}\n详情：{idea.description}"
+    final_answer = ""
+    used_refs = []
 
-    # === 关键：模式路由 ===
-    if request.mode == 'update':
-        # 【功能 Calling】: 更新模式
-        system_instruction = f"""
-        你是一个科研Idea迭代专家。
-        用户的意图是：**修改或完善当前的 Idea**。
-        
-        【当前 Idea】:
-        {current_idea_text}
-        
-        【检索到的相关知识/论文】:
-        {knowledge_context}
-        
-        请执行以下步骤：
-        1. 结合用户的新指令和检索到的知识，思考如何改进 Idea。
-        2. 用自然语言向用户解释你修改了哪里，为什么要改。
-        3. **重要**：最后必须生成一个全新的 Idea 版本，并用 XML 标签包裹，格式如下：
-           <SUGGEST_IDEA>
-           (这里是修改后的完整 Idea 描述，不要包含原来的标题，只写描述内容)
-           </SUGGEST_IDEA>
-        """
-        
-    elif request.mode == 'critique':
-        # 【功能 Calling】: 批判模式
-        system_instruction = f"""
-        你是一个严厉的审稿人 (Reviewer 2)。
-        请基于【检索到的知识】：
-        {knowledge_context}
-        
-        对用户的 Idea ({current_idea_text}) 进行批判。
-        你需要指出逻辑漏洞、创新点不足或与现有文献冲突的地方。
-        """
+    # 🟢 预先定义过滤条件 (复用逻辑)
+    # 逻辑：只有当 (选了Idea) 且 (没开全局搜索) 时，才限制范围
+    # 否则 (没选Idea 或 开了全局) -> filter 为 None (搜全部)
+    current_filter = {"idea_id": request.idea_id} if (request.idea_id and not request.enable_global_search) else None
+    
+    # 用于打印日志看看
+    mode_name = "🌍 全局联想" if not current_filter else f"🔒 专注当前(ID:{request.idea_id})"
 
-    else: # mode == 'chat'
-        system_instruction = f"""
+    # ================= 分支一：指定了论文 (Context Locked) =================
+    if request.paper_id:
+        paper = db.query(models.Paper).filter(models.Paper.id == request.paper_id).first()
+        if not paper:
+            return schemas.ChatResponse(response_text="❌ 找不到指定的论文数据", message_id=0)
+
+        # --- A. 深度阅读模式 (Full Text) ---
+        # 这种模式下，我们要深度读这一篇，通常不需要 RAG 干扰，所以不使用 filter
+        if request.use_full_text:
+            print(f"📖 [深度模式] 阅读全文：{paper.title}")
+            if not paper.full_text:
+                return schemas.ChatResponse(response_text="⚠️ 该论文未录入全文数据", message_id=0)
+
+            system_prompt = f"""
+            你是一个专业的论文审稿人。用户指定了一篇论文进行【深度研读】。
+            【标题】: {paper.title}
+            【全文】:
+            {paper.full_text[:35000]} 
+            请基于全文细节回答。
+            """
+            messages = [{"role": "system", "content": system_prompt}, {"role": "user", "content": request.query}]
+
+        # --- B. 摘要聚焦 + RAG 联想模式 ---
+        # 🟢 关键点：这里要用到 current_filter
+        else:
+            print(f"🔍 [摘要模式] {mode_name} - 论文：{paper.title}")
+            
+            # 1. 基础是摘要
+            base_context = f"【当前讨论论文】\n标题：{paper.title}\n摘要：{paper.abstract}"
+            
+            # 2. RAG 检索 (这里用到了 filter！)
+            # 如果开启全局，这里就能搜到其他 Idea 的相关论文
+            search_results = memory_core.search_memory(
+                request.query, 
+                n_results=3, 
+                filter_metadata=current_filter # 👈 注入过滤逻辑
+            )
+            rag_context = "\n".join([f"- {r['content']}" for r in search_results])
+            used_refs = [r['content'][:20] for r in search_results]
+
+            system_prompt = f"""
+            你是一个科研助手。
+            {base_context}
+            
+            【关联知识 ({mode_name})】:
+            {rag_context}
+            
+            请结合摘要和关联知识回答。
+            """
+            messages = [{"role": "system", "content": system_prompt}, {"role": "user", "content": request.query}]
+
+        # 执行 LLM (分支一)
+        response = client.chat.completions.create(model="deepseek-chat", messages=messages, stream=False)
+        final_answer = response.choices[0].message.content
+
+    # ================= 分支二：Agent 自由模式 (无指定 Paper) =================
+    else:
+        print(f"🤖 [Agent模式] {mode_name}")
+        
+        # 1. 历史记录
+        history_context = ""
+        if request.idea_id and request.history_len > 0:
+            # 历史记录依然建议只看当前的，否则对话太乱。
+            # 当然，如果你想让“对话历史”也跨 Idea，可以把 filter 去掉。这里暂且保持只看当前 Idea 的历史。
+            last_msgs = db.query(models.Message).filter(models.Message.idea_id == request.idea_id).order_by(models.Message.created_at.desc()).limit(request.history_len).all()
+            last_msgs.reverse()
+            history_context = "\n".join([f"{m.role}: {m.content}" for m in last_msgs])
+
+        # 2. Agent 思考
+        agent_system_prompt = f"""
         你是一个科研助手。
-        【相关对话历史】:
-        {history_context}
-        
-        【相关知识库】:
-        {knowledge_context}
-        
-        如果用户的问题和科研无关，请正常聊天。
-        如果用户似乎在暗示要修改 Idea，请提示用户切换到“修改模式”。
+        规则：
+        1. 需要查资料 -> 输出 <TOOL_CALL>search: 关键词</TOOL_CALL>
+        2. 否则 -> 直接回答。
         """
 
-    # --- 4. 调用 LLM ---
-    try:
-        response = client.chat.completions.create(
+        resp1 = client.chat.completions.create(
             model="deepseek-chat",
             messages=[
-                {"role": "system", "content": system_instruction},
-                {"role": "user", "content": request.query}
-            ],
-            stream=False
+                {"role": "system", "content": agent_system_prompt},
+                {"role": "user", "content": f"历史:\n{history_context}\n问题:\n{request.query}"}
+            ]
         )
-        ai_content = response.choices[0].message.content
-
-        # --- 5. 解析结果 (Function Result Parsing) ---
-        suggested_idea = None
+        first_content = resp1.choices[0].message.content
         
-        # 只有在 update 模式下，才去尝试提取新 Idea
-        if request.mode == 'update':
-            import re
-            match = re.search(r"<SUGGEST_IDEA>(.*?)</SUGGEST_IDEA>", ai_content, re.DOTALL)
-            if match:
-                suggested_idea = match.group(1).strip()
-                # 把标签去掉，剩下的作为对话内容返回，或者你可以保留标签让前端处理
-                # 这里我们选择在对话文本里隐藏掉那段冗长的定义，只留解释
-                ai_content = ai_content.replace(match.group(0), "\n\n(已为您生成修改建议，请查看下方卡片👇)")
-
-        # --- 6. 把 AI 的回复也存入 SQL ---
-        ai_msg = models.Message(
-            content=ai_content, # 这里存的是去掉了 XML 的纯文本
-            role="ai",
-            user_id=request.user_id,
-            idea_id=request.idea_id
-        )
-        db.add(ai_msg)
-        db.commit()
-
-        # --- 7.  根据用户选择存储对话作为知识 ---
-        # 如果用户在前台勾选了 "作为知识保存" (save_as_knowledge=True)
-        # 我们就把这轮对话作为“高权重知识”立即存入向量库
-        if request.save_as_knowledge:
-            # 存入向量库
-            memory_core.add_memory(
-                text=f"【用户精选知识】\n问: {request.query}\n答: {ai_content}",
-                metadata={
-                    "user_id": request.user_id,
-                    "idea_id": request.idea_id if request.idea_id else 0,
-                    "role": "explicit_knowledge", # 显式知识标记
-                    "timestamp": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                }
+        # 3. 工具检测与执行
+        tool_query = detect_tool_call(first_content)
+        
+        if tool_query:
+            keyword = tool_query.replace("search:", "").strip()
+            print(f"🔧 Agent 正在搜索: {keyword} | 模式: {mode_name}")
+            
+            # 🟢 关键点：Agent 搜索时也要遵守 filter 规则
+            res = memory_core.search_memory(
+                keyword, 
+                n_results=3, 
+                filter_metadata=current_filter # 👈 注入过滤逻辑
             )
-            print(f" >> 已手动固化知识: {request.query[:10]}...")
+            
+            knowledge = "\n".join([f"- {r['content']}" for r in res])
+            used_refs = [r['content'][:20] for r in res]
+            
+            resp2 = client.chat.completions.create(
+                model="deepseek-chat",
+                messages=[
+                    {"role": "system", "content": "结合检索结果回答："},
+                    {"role": "user", "content": f"问题:{request.query}\n资料:{knowledge}"}
+                ]
+            )
+            final_answer = resp2.choices[0].message.content
+        else:
+            final_answer = first_content
 
-        # --- 8. 返回结果 ---
-        return schemas.ChatResponse(
-            response_text=ai_content,
-            suggested_idea=suggested_idea,
-            used_references=[r['content'][:20] for r in search_results],
-            message_id=ai_msg.id
-        )
+    # ================= 收尾 =================
+    ai_msg = models.Message(content=final_answer, role="ai", user_id=request.user_id, idea_id=request.idea_id)
+    db.add(ai_msg)
+    db.commit()
 
-    except Exception as e:
-        print(f"Chat Error: {e}")
-        return schemas.ChatResponse(
-            response_text="系统出错了，请检查日志。",
-            message_id=0
-        )
+    return schemas.ChatResponse(
+        response_text=final_answer,
+        suggested_idea=None,
+        used_references=used_refs,
+        message_id=ai_msg.id
+    )
 
 # ================= 功能C：进行对抗性检索（深度评判） =================  
 async def critical_agent_chat(
