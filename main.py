@@ -1,3 +1,6 @@
+'''
+此代码为主函数（废话）
+'''
 from fastapi import FastAPI, Depends, HTTPException, UploadFile, File, Form
 from sqlalchemy.orm import Session
 import models, schemas, crud, services

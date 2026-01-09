@@ -1,3 +1,6 @@
+'''
+此代码用于管理向量知识库，包含：记忆添加、普通记忆检索、睡眠记忆检索
+'''
 import chromadb
 from chromadb.utils import embedding_functions
 import os

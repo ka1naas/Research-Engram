@@ -1,5 +1,5 @@
 '''
-此代码为llm可调用的工具（agent function calling）
+此代码为llm可调用的工具（计划更新agent function calling，目前都是代码写死的调用）
 '''
 import json
 import os

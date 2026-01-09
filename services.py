@@ -1,7 +1,8 @@
 '''
-功能b先帮用户生成或改进idea（此时用户
-没有idea或者用户其实本身已经知道idea有问题，才会选择让ai帮忙迭代）
-而功能c，是在用户已经有idea的情况下，需要一点批评时才采用的
+功能a：对上传的论文生成摘要，以及对抗性搜索需要的内容
+功能b：帮用户生成或改进idea，或者，进行普通对话，四种模式
+功能c：在用户已经有idea的情况下，需要一点批评时才采用的
+后续更新计划：加入真正的function calling实现简单的agent任务
 '''
 import os
 from sqlalchemy.orm import Session
