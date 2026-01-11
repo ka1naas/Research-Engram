@@ -157,7 +157,7 @@ npm run dev
 
 ---
 
-## 📄项目结构(Project Structure)
+## 📄 项目结构(Project Structure)
 
 Research-Engram/
 ├── backend/                # 后端代码文件夹
