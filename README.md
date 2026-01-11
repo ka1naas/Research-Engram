@@ -155,10 +155,13 @@ npm install
 # Start development server
 npm run dev
 
+```
+
 ---
 
-## 📄 项目结构(Project Structure)
+## 📄 项目结构 (Project Structure)
 
+```text
 Research-Engram/
 ├── backend/                # 后端代码文件夹
 │   ├── main.py             # 入口
@@ -176,3 +179,4 @@ Research-Engram/
 ├── README.md               # 项目说明书
 ├── .gitignore              # 忽略文件
 └── .env.example            # 配置示例
+```
