@@ -154,3 +154,25 @@ npm install
 # 3. 启动开发服务器
 # Start development server
 npm run dev
+
+---
+
+## 📄项目结构(Project Structure)
+
+Research-Engram/
+├── backend/                # 后端代码文件夹
+│   ├── main.py             # 入口
+│   ├── services.py         # 业务逻辑
+│   ├── models.py           # 数据库模型
+│   ├── schemas.py          # Pydantic模型
+│   ├── crud.py             # 数据库操作
+│   ├── sleep.py            # 睡眠机制
+│   ├── vector_memory.py    # 向量库逻辑
+│   └── requirements.txt    # 后端依赖列表
+├── frontend/               # 前端代码文件夹 (把 Vue 项目放这里)
+│   ├── src/
+│   ├── package.json
+│   └── vite.config.js
+├── README.md               # 项目说明书
+├── .gitignore              # 忽略文件
+└── .env.example            # 配置示例
